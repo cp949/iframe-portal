@@ -17,10 +17,16 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  createBuildEnvironment,
   discoverProjects,
   selectProjectNames,
   shipProjects,
 } from "../src/shipping.mjs";
+
+/** bash가 backslash를 escape로 해석하지 않도록 slash 경로로 바꾼다. */
+function toShellPath(filePath) {
+  return filePath.split(path.sep).join("/");
+}
 
 /** 테스트마다 격리된 iframe 프로젝트 루트를 만든다. */
 async function createFixture() {
@@ -36,53 +42,22 @@ async function createFixture() {
   };
 }
 
-test("실행 가능한 빌드 스크립트가 있는 프로젝트만 이름순으로 탐색한다", async () => {
+test("빌드 스크립트가 있는 프로젝트만 이름순으로 탐색한다", async () => {
   const fixture = await createFixture();
 
   try {
     for (const name of ["iframe-zeta", "iframe-alpha", "not-shippable"]) {
       await mkdir(path.join(fixture.iframesDirectory, name));
     }
-    await writeFile(
-      path.join(
+    for (const name of ["iframe-zeta", "iframe-alpha"]) {
+      const buildScript = path.join(
         fixture.iframesDirectory,
-        "iframe-zeta",
+        name,
         "iframe-build-html.sh",
-      ),
-      "",
-    );
-    await chmod(
-      path.join(
-        fixture.iframesDirectory,
-        "iframe-zeta",
-        "iframe-build-html.sh",
-      ),
-      0o755,
-    );
-    await writeFile(
-      path.join(
-        fixture.iframesDirectory,
-        "iframe-alpha",
-        "iframe-build-html.sh",
-      ),
-      "",
-    );
-    await chmod(
-      path.join(
-        fixture.iframesDirectory,
-        "iframe-alpha",
-        "iframe-build-html.sh",
-      ),
-      0o755,
-    );
-    await writeFile(
-      path.join(
-        fixture.iframesDirectory,
-        "not-shippable",
-        "iframe-build-html.sh",
-      ),
-      "",
-    );
+      );
+      await writeFile(buildScript, "");
+      await chmod(buildScript, 0o755);
+    }
 
     const projects = await discoverProjects(fixture.iframesDirectory);
 
@@ -91,6 +66,31 @@ test("실행 가능한 빌드 스크립트가 있는 프로젝트만 이름순�
     await fixture.dispose();
   }
 });
+
+test(
+  "POSIX에서는 실행 권한이 없는 빌드 스크립트를 배포 대상에서 제외한다",
+  // Windows는 실행 권한 bit가 없어 이 필터를 적용하지 않는다.
+  { skip: process.platform === "win32" },
+  async () => {
+    const fixture = await createFixture();
+
+    try {
+      await mkdir(path.join(fixture.iframesDirectory, "not-shippable"));
+      await writeFile(
+        path.join(
+          fixture.iframesDirectory,
+          "not-shippable",
+          "iframe-build-html.sh",
+        ),
+        "",
+      );
+
+      assert.deepEqual(await discoverProjects(fixture.iframesDirectory), []);
+    } finally {
+      await fixture.dispose();
+    }
+  },
+);
 
 test("iframes 디렉터리가 없으면 배포 가능한 프로젝트가 없는 것으로 처리한다", async () => {
   const fixture = await createFixture();
@@ -191,6 +191,33 @@ test("대화형 메뉴에서 취소를 고르면 배포 대상을 반환하지 �
   assert.deepEqual(selected, []);
 });
 
+test(
+  "Windows에서는 IFRAME_PATH를 MSYS 경로 변환 대상에서 제외한다",
+  { skip: process.platform !== "win32" },
+  () => {
+    const env = createBuildEnvironment("/private/iframe/iframe-alpha", {
+      MSYS2_ARG_CONV_EXCL: "/keep",
+    });
+
+    assert.equal(env.IFRAME_PATH, "/private/iframe/iframe-alpha");
+    assert.equal(env.MSYS2_ENV_CONV_EXCL, "IFRAME_PATH");
+    assert.equal(
+      env.MSYS2_ARG_CONV_EXCL,
+      "/keep;/private/iframe/iframe-alpha",
+    );
+  },
+);
+
+test(
+  "POSIX에서는 MSYS 전용 환경변수를 추가하지 않는다",
+  { skip: process.platform === "win32" },
+  () => {
+    const env = createBuildEnvironment("/private/iframe/iframe-alpha", {});
+
+    assert.deepEqual(env, { IFRAME_PATH: "/private/iframe/iframe-alpha" });
+  },
+);
+
 test("프로젝트별 IFRAME_PATH로 빌드한 archive를 adapter에 전달한다", async () => {
   const fixture = await createFixture();
   const projectName = "iframe-alpha";
@@ -206,8 +233,9 @@ test("프로젝트별 IFRAME_PATH로 빌드한 archive를 adapter에 전달한�
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        `printf '%s' \"$IFRAME_PATH\" > ${JSON.stringify(receivedPathFile)}`,
-        `printf 'archive' > ${JSON.stringify(path.join(projectDirectory, `${projectName}.tar.gz`))}`,
+        // Windows에서 MSYS 경로 변환이 일어나는 지점은 native 프로그램 실행이므로 node로 기록한다.
+        `node -e "require('node:fs').writeFileSync(process.argv[1], process.env.IFRAME_PATH + '|' + process.argv[2])" ${JSON.stringify(toShellPath(receivedPathFile))} \"$IFRAME_PATH\"`,
+        `printf 'archive' > ${JSON.stringify(toShellPath(path.join(projectDirectory, `${projectName}.tar.gz`)))}`,
       ].join("\n"),
     );
     await chmod(buildScript, 0o755);
@@ -227,7 +255,7 @@ test("프로젝트별 IFRAME_PATH로 빌드한 archive를 adapter에 전달한�
 
     assert.equal(
       await readFile(receivedPathFile, "utf8"),
-      "/private/iframe/iframe-alpha",
+      "/private/iframe/iframe-alpha|/private/iframe/iframe-alpha",
     );
     assert.equal(
       await readFile(shippedArchiveFile, "utf8"),
@@ -315,7 +343,7 @@ test("adapter가 빈 IFRAME_PATH를 반환하면 빌드를 시작하지 않는�
     await mkdir(projectDirectory);
     await writeFile(
       buildScript,
-      `#!/usr/bin/env bash\nprintf 'built' > ${JSON.stringify(buildMarker)}\n`,
+      `#!/usr/bin/env bash\nprintf 'built' > ${JSON.stringify(toShellPath(buildMarker))}\n`,
     );
     await chmod(buildScript, 0o755);
 

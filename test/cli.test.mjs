@@ -33,6 +33,8 @@ function runPackageCli(args) {
   return spawnSync("pnpm", ["ship", ...args], {
     cwd: rootDirectory,
     encoding: "utf8",
+    // Windows의 pnpm은 .cmd shim이라 shell 없이는 실행되지 않는다.
+    shell: process.platform === "win32",
     env: {
       ...process.env,
       IFRAME_PORTAL_SHIP_CONFIG_PATH: path.join(

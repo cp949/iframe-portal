@@ -6,7 +6,8 @@
 
 - Node.js `^20.19.0 || >=22.13.0`
 - pnpm 10
-- 각 프로젝트의 실행 가능한 `iframe-build-html.sh`
+- bash로 실행 가능한 각 프로젝트의 `iframe-build-html.sh`
+- Windows에서는 Git for Windows(Git Bash)
 
 ## 설치
 
@@ -60,6 +61,27 @@ pnpm ship --all
 ```
 
 인자가 없는 비대화형 실행은 실패합니다. 전체 배포는 `--all`을 명시해야 합니다.
+
+### Windows (Git Bash)
+
+Windows에서는 CLI가 `iframe-build-html.sh`를 Git Bash의 `bash.exe`로 실행합니다. bash는 다음 순서로 찾습니다.
+
+1. `IFRAME_PORTAL_BASH` 환경변수에 지정한 경로
+2. Git Bash가 설정한 `EXEPATH`
+3. Git for Windows 기본 설치 경로
+4. `PATH`의 `bash.exe` (WSL launcher인 `%SystemRoot%\System32\bash.exe`는 제외)
+
+표준 위치가 아닌 곳에 설치했다면 경로를 직접 지정합니다.
+
+```bash
+IFRAME_PORTAL_BASH="D:/tools/git/bin/bash.exe" pnpm ship iframe-image-editor
+```
+
+MSYS는 `/aimk/iframe` 같은 값을 Windows 경로로 바꾸기 때문에 CLI가 `IFRAME_PATH`를 변환 제외 목록(`MSYS2_ENV_CONV_EXCL`, `MSYS2_ARG_CONV_EXCL`)에 넣어 전달합니다. 빌드 스크립트에서 `IFRAME_PATH`를 다른 이름으로 다시 내보내면 이 보호가 적용되지 않습니다.
+
+Git Bash의 mintty 터미널은 Node에서 TTY로 보이지 않아 대화형 메뉴가 열리지 않습니다. 메뉴가 필요하면 `winpty pnpm ship`으로 실행하고, 그렇지 않으면 프로젝트명이나 `--all`을 지정합니다.
+
+설정 파일 기본 경로는 `%USERPROFILE%\.config\iframe-portal\ship.json`으로, Git Bash의 `~/.config/iframe-portal/ship.json`과 같은 위치입니다.
 
 ## 프로젝트 계약
 

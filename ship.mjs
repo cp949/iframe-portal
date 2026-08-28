@@ -54,11 +54,21 @@ async function main() {
     );
   }
 
+  const interactive =
+    process.stdin.isTTY === true && process.stdout.isTTY === true;
+  // mintty의 pty는 Node에서 TTY로 보이지 않아 대화형 메뉴를 열 수 없다.
+  const isMintty =
+    process.platform === "win32" && typeof process.env.MSYSTEM === "string";
+
   const projectNames = await selectProjectNames({
     availableProjects,
     requestedProjects,
     shipAll,
-    interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    interactive,
+    nonInteractiveHint:
+      !interactive && isMintty
+        ? "Git Bash(mintty)에서는 대화형 메뉴를 열 수 없습니다. `winpty pnpm ship`으로 실행하거나 프로젝트명을 지정하세요."
+        : "",
     promptProject: (projects) =>
       select({
         message: "배포할 iframe 프로젝트를 선택하세요.",
