@@ -2,6 +2,7 @@
   "iframePrefix": "",
   "endpoint": "",
   "headers": {},
+  "encryptionKey": "",
   "fileField": "",
   "fields": {}
 }

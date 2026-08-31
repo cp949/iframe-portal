@@ -1,3 +1,4 @@
+import { BlobReader, BlobWriter, ZipWriter } from "@zip.js/zip.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -43,10 +44,24 @@ export async function loadShipConfig(configPath) {
   assertNonEmptyString(config, "iframePrefix");
   assertNonEmptyString(config, "endpoint");
   assertStringRecord(config, "headers");
+  assertNonEmptyString(config, "encryptionKey");
   assertNonEmptyString(config, "fileField");
   assertStringRecord(config, "fields");
 
   return config;
+}
+
+async function createEncryptedArchive(archivePath, encryptionKey) {
+  const archiveName = path.basename(archivePath);
+  const archiveContent = await readFile(archivePath);
+  const zipWriter = new ZipWriter(new BlobWriter("application/zip"));
+
+  await zipWriter.add(
+    archiveName,
+    new BlobReader(new Blob([archiveContent])),
+    { password: encryptionKey },
+  );
+  return await zipWriter.close();
 }
 
 export function createHttpShipAdapter(
@@ -69,10 +84,15 @@ export function createHttpShipAdapter(
       assertProjectName(projectName);
 
       const formData = new FormData();
-      const archive = new Blob([await readFile(archivePath)], {
-        type: "application/gzip",
-      });
-      formData.append(config.fileField, archive, archiveName);
+      const encryptedArchive = await createEncryptedArchive(
+        archivePath,
+        config.encryptionKey,
+      );
+      formData.append(
+        config.fileField,
+        encryptedArchive,
+        `${projectName}.zip`,
+      );
 
       for (const [fieldName, fieldValue] of Object.entries(config.fields)) {
         formData.append(fieldName, fieldValue);

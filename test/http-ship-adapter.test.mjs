@@ -3,6 +3,7 @@
  */
 
 import assert from "node:assert/strict";
+import { BlobReader, BlobWriter, ZipReader } from "@zip.js/zip.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,6 +20,7 @@ function createConfig() {
     iframePrefix: "/private/iframe",
     endpoint: "https://private.invalid/upload",
     headers: { "x-private-auth": "secret" },
+    encryptionKey: "archive-password",
     fileField: "archive",
     fields: { stripTop: "true" },
   };
@@ -65,6 +67,10 @@ test("잘못된 필수 설정은 로드 단계에서 거부한다", async () => 
         expected: /ship 설정의 headers는 문자열 값 object여야 합니다/,
       },
       {
+        config: { ...createConfig(), encryptionKey: "" },
+        expected: /ship 설정의 encryptionKey는 비어 있지 않은 문자열이어야 합니다/,
+      },
+      {
         config: { ...createConfig(), fileField: "" },
         expected: /ship 설정의 fileField는 비어 있지 않은 문자열이어야 합니다/,
       },
@@ -106,7 +112,7 @@ test("잘못된 JSON 설정은 설정 파일 경로와 함께 거부한다", asy
   }
 });
 
-test("archive 파일명에서 프로젝트를 추출해 설정된 multipart 요청을 보낸다", async () => {
+test("tar.gz를 암호화 ZIP으로 포장해 설정된 multipart 요청을 보낸다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-archive-"));
   const archivePath = path.join(
     tempDirectory,
@@ -126,8 +132,21 @@ test("archive 파일명에서 프로젝트를 추출해 설정된 multipart 요�
         assert.equal(options.body.get("stripTop"), "true");
 
         const archive = options.body.get("archive");
-        assert.equal(archive.name, "iframe-image-editor.tar.gz");
-        assert.equal(await archive.text(), "archive-content");
+        assert.equal(archive.name, "iframe-image-editor.zip");
+
+        const zipReader = new ZipReader(new BlobReader(archive));
+        try {
+          const entries = await zipReader.getEntries();
+          assert.equal(entries.length, 1);
+          assert.equal(entries[0].filename, "iframe-image-editor.tar.gz");
+
+          const extracted = await entries[0].getData(new BlobWriter(), {
+            password: "archive-password",
+          });
+          assert.equal(await extracted.text(), "archive-content");
+        } finally {
+          await zipReader.close();
+        }
 
         return new Response(JSON.stringify({ success: true }), {
           status: 200,

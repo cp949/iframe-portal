@@ -29,6 +29,7 @@ chmod 600 ~/.config/iframe-portal/ship.json
   "headers": {
     "...": "..."
   },
+  "encryptionKey": "...",
   "fileField": "...",
   "fields": {
     "...": "..."
@@ -39,6 +40,7 @@ chmod 600 ~/.config/iframe-portal/ship.json
 - `iframePrefix`: 프로젝트 이름 앞에 붙는 비공개 iframe 경로
 - `endpoint`: 프로젝트 이름 앞에 붙는 업로드 endpoint
 - `headers`: 업로드 요청에 추가할 비공개 header와 값
+- `encryptionKey`: `.tar.gz`를 outer ZIP으로 암호화할 비공개 키
 - `fileField`: multipart archive 필드명
 - `fields`: multipart에 추가할 문자열 필드
 
