@@ -42,7 +42,9 @@ async function main() {
     );
   }
 
-  const adapter = createHttpShipAdapter(await loadShipConfig(configPath));
+  const config = await loadShipConfig(configPath);
+  console.log(`업로드 endpoint: ${config.endpoint}`);
+  const adapter = createHttpShipAdapter(config);
   const iframesDirectory = path.join(scriptDirectory, "iframes");
   const availableProjects = await discoverProjects(iframesDirectory);
   const requestedProjects = program.args;
