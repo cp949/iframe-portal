@@ -3,11 +3,35 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const PROJECT_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+const DISPLAYABLE_NETWORK_ERROR_CODES = new Set([
+  "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "ETIMEDOUT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
 
 function assertProjectName(projectName) {
   if (!PROJECT_NAME_PATTERN.test(projectName)) {
     throw new Error(`잘못된 프로젝트 이름입니다: ${projectName}`);
   }
+}
+
+function getDestinationPath(projectName) {
+  assertProjectName(projectName);
+  const destinationPath = projectName.startsWith("iframe-")
+    ? projectName.slice("iframe-".length)
+    : projectName;
+
+  if (destinationPath.length === 0) {
+    throw new Error("iframe 경로명이 비어 있을 수 없습니다.");
+  }
+
+  return destinationPath;
 }
 
 function assertNonEmptyString(config, key) {
@@ -30,6 +54,22 @@ function assertStringRecord(config, key) {
   }
 }
 
+function formatNetworkError(error) {
+  let current = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    const code = typeof current.code === "string" ? current.code : null;
+    if (code && DISPLAYABLE_NETWORK_ERROR_CODES.has(code)) {
+      const message =
+        typeof current.message === "string" && current.message !== "fetch failed"
+          ? ` ${current.message}`
+          : "";
+      return `[${code}]${message}`;
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
 export async function loadShipConfig(configPath) {
   let config;
   try {
@@ -44,7 +84,6 @@ export async function loadShipConfig(configPath) {
   assertNonEmptyString(config, "iframePrefix");
   assertNonEmptyString(config, "endpoint");
   assertStringRecord(config, "headers");
-  assertNonEmptyString(config, "encryptionKey");
   assertNonEmptyString(config, "fileField");
   assertStringRecord(config, "fields");
 
@@ -70,8 +109,8 @@ export function createHttpShipAdapter(
 ) {
   return {
     getIframePath(projectName) {
-      assertProjectName(projectName);
-      return `${config.iframePrefix.replace(/\/+$/, "")}/${projectName}`;
+      const destinationPath = getDestinationPath(projectName);
+      return `${config.iframePrefix.replace(/\/+$/, "")}/${destinationPath}`;
     },
     async shipIframe(archivePath) {
       const archiveName = path.basename(archivePath);
@@ -81,35 +120,46 @@ export function createHttpShipAdapter(
       }
 
       const projectName = archiveName.slice(0, -".tar.gz".length);
-      assertProjectName(projectName);
+      const destinationPath = getDestinationPath(projectName);
 
       const formData = new FormData();
-      const encryptedArchive = await createEncryptedArchive(
-        archivePath,
-        config.encryptionKey,
-      );
+      const archive = config.encryptionKey
+        ? await createEncryptedArchive(archivePath, config.encryptionKey)
+        : new Blob([await readFile(archivePath)], {
+            type: "application/gzip",
+          });
+      const uploadArchiveName = config.encryptionKey
+        ? `${projectName}.zip`
+        : archiveName;
       formData.append(
         config.fileField,
-        encryptedArchive,
-        `${projectName}.zip`,
+        archive,
+        uploadArchiveName,
       );
 
       for (const [fieldName, fieldValue] of Object.entries(config.fields)) {
         formData.append(fieldName, fieldValue);
       }
+      formData.append("destinationPath", destinationPath);
 
       let response;
       try {
         response = await fetchImpl(
-          `${config.endpoint.replace(/\/+$/, "")}/${encodeURIComponent(projectName)}`,
+          config.endpoint.replace(/\/+$/, ""),
           {
             method: "POST",
             headers: config.headers,
             body: formData,
           },
         );
-      } catch {
-        throw new Error("배포 서버에 연결할 수 없습니다.");
+      } catch (error) {
+        const detail = formatNetworkError(error);
+        throw new Error(
+          detail
+            ? `배포 서버에 연결할 수 없습니다: ${detail}`
+            : "배포 서버에 연결할 수 없습니다.",
+          { cause: error },
+        );
       }
 
       if (!response.ok) {

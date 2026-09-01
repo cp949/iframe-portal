@@ -1,8 +1,11 @@
 {
-  "iframePrefix": "",
-  "endpoint": "",
-  "headers": {},
-  "encryptionKey": "",
-  "fileField": "",
-  "fields": {}
+  "iframePrefix": "/abc-server/iframe",
+  "endpoint": "https://abc.com/abc-server/upload",
+  "headers": {
+    "x-custom-header": "sample"
+  },
+  "encryptionKey": "sample-nullable",
+  "fileField": "file",
+  "fields": {
+  }
 }

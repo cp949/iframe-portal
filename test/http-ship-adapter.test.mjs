@@ -41,7 +41,17 @@ test("JSON 설정으로 프로젝트의 전체 IFRAME_PATH를 계산한다", asy
 
     assert.equal(
       adapter.getIframePath("iframe-image-editor"),
-      "/private/iframe/iframe-image-editor",
+      "/private/iframe/image-editor",
+    );
+
+    assert.equal(
+      adapter.getIframePath("image-editor"),
+      "/private/iframe/image-editor",
+    );
+
+    assert.throws(
+      () => adapter.getIframePath("iframe-"),
+      /iframe 경로명이 비어 있을 수 없습니다/,
     );
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
@@ -65,10 +75,6 @@ test("잘못된 필수 설정은 로드 단계에서 거부한다", async () => 
       {
         config: { ...createConfig(), headers: [] },
         expected: /ship 설정의 headers는 문자열 값 object여야 합니다/,
-      },
-      {
-        config: { ...createConfig(), encryptionKey: "" },
-        expected: /ship 설정의 encryptionKey는 비어 있지 않은 문자열이어야 합니다/,
       },
       {
         config: { ...createConfig(), fileField: "" },
@@ -125,11 +131,12 @@ test("tar.gz를 암호화 ZIP으로 포장해 설정된 multipart 요청을 보�
       fetchImpl: async (url, options) => {
         assert.equal(
           url,
-          "https://private.invalid/upload/iframe-image-editor",
+          "https://private.invalid/upload",
         );
         assert.equal(options.method, "POST");
         assert.equal(options.headers["x-private-auth"], "secret");
         assert.equal(options.body.get("stripTop"), "true");
+        assert.equal(options.body.get("destinationPath"), "image-editor");
 
         const archive = options.body.get("archive");
         assert.equal(archive.name, "iframe-image-editor.zip");
@@ -159,6 +166,39 @@ test("tar.gz를 암호화 ZIP으로 포장해 설정된 multipart 요청을 보�
     await rm(tempDirectory, { recursive: true, force: true });
   }
 });
+
+for (const encryptionKey of [undefined, null, ""]) {
+  test(`encryptionKey가 ${encryptionKey === "" ? "빈 문자열" : String(encryptionKey)}이면 원본 archive를 보낸다`, async () => {
+    const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-plain-archive-"));
+    const archivePath = path.join(
+      tempDirectory,
+      "iframe-image-editor.tar.gz",
+    );
+    const expectedArchiveName = path.basename(archivePath);
+
+    try {
+      await writeFile(archivePath, "archive-content");
+      const config = createConfig();
+      if (encryptionKey === undefined) {
+        delete config.encryptionKey;
+      } else {
+        config.encryptionKey = encryptionKey;
+      }
+
+      const adapter = createHttpShipAdapter(config, {
+        fetchImpl: async (url, options) => {
+          assert.equal(options.body.get("archive").name, expectedArchiveName);
+          assert.equal(await options.body.get("archive").text(), "archive-content");
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        },
+      });
+
+      await adapter.shipIframe(archivePath);
+    } finally {
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
 
 test("tar.gz가 아닌 파일은 업로드 전에 거부한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-extension-"));
@@ -259,6 +299,52 @@ test("네트워크 오류의 내부 정보는 노출하지 않는다", async () 
         assert.equal(error.message, "배포 서버에 연결할 수 없습니다.");
         return true;
       },
+    );
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("인증서 검증 오류의 원인을 표시한다", async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-cert-error-"));
+  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+
+  try {
+    await writeFile(archivePath, "archive");
+    const adapter = createHttpShipAdapter(createConfig(), {
+      fetchImpl: async () => {
+        const cause = new Error("self-signed certificate in certificate chain");
+        cause.code = "SELF_SIGNED_CERT_IN_CHAIN";
+        throw new TypeError("fetch failed", { cause });
+      },
+    });
+
+    await assert.rejects(
+      adapter.shipIframe(archivePath),
+      /배포 서버에 연결할 수 없습니다: \[SELF_SIGNED_CERT_IN_CHAIN\] self-signed certificate in certificate chain/,
+    );
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("연결 초기화 오류의 원인을 표시한다", async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-reset-error-"));
+  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+
+  try {
+    await writeFile(archivePath, "archive");
+    const adapter = createHttpShipAdapter(createConfig(), {
+      fetchImpl: async () => {
+        const cause = new Error("socket hang up");
+        cause.code = "ECONNRESET";
+        throw new TypeError("fetch failed", { cause });
+      },
+    });
+
+    await assert.rejects(
+      adapter.shipIframe(archivePath),
+      /배포 서버에 연결할 수 없습니다: \[ECONNRESET\] socket hang up/,
     );
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
