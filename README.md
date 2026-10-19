@@ -26,6 +26,8 @@ chmod 600 ~/.config/iframe-portal/ship.json
 {
   "iframePrefix": "...",
   "endpoint": "...",
+  "bodyType": "form-data",
+  "destinationPathField": "destinationPath",
   "headers": {
     "...": "..."
   },
@@ -39,10 +41,19 @@ chmod 600 ~/.config/iframe-portal/ship.json
 
 - `iframePrefix`: 프로젝트 이름 앞에 붙는 비공개 iframe 경로
 - `endpoint`: 프로젝트 이름 앞에 붙는 업로드 endpoint
+- `bodyType`: `form-data`(기본값) 또는 `raw`. 생략하면 기존 FormData 전송을 유지합니다.
+- `destinationPathField`: 대상 경로를 전달할 이름. 기본값은 `destinationPath`입니다. FormData에서는 폼 필드, raw에서는 쿼리 이름입니다.
 - `headers`: 업로드 요청에 추가할 비공개 header와 값
-- `encryptionKey`: `.tar.gz`를 outer ZIP으로 암호화할 비공개 키
-- `fileField`: multipart archive 필드명
-- `fields`: multipart에 추가할 문자열 필드
+- `encryptionKey`: `.zip` 또는 `.tar.gz`를 outer ZIP으로 암호화할 비공개 키
+- `fileField`: multipart archive 필드명. raw에서는 사용하지 않습니다.
+- `fields`: 추가 문자열 필드. FormData에서는 폼 필드, raw에서는 쿼리로 전달합니다.
+
+raw 모드는 압축 파일을 본문으로 보내고 HTTP 2xx를 성공으로 판정합니다. FormData 모드는 기존처럼 JSON 응답의 `success: true`를 확인합니다.
+raw 모드의 쿼리는 endpoint에 설정한 값에 `fields`를 덮어쓴 뒤 계산한 대상 경로를 적용합니다.
+`Content-Type`을 headers에 지정하지 않으면 압축 형식에 맞게 보냅니다. `Content-Length`는 전송할 Blob 크기로 자동 설정됩니다.
+
+bbcode 배포 API에서는 `bodyType: "raw"`, `destinationPathField: "path"`, `encryptionKey: null`을 사용합니다.
+endpoint의 `domain` 쿼리에 asset 도메인을 지정합니다. `iframe-` 접두사를 뺀 프로젝트 이름이 `path`로 전달됩니다.
 
 설정 파일은 아래 순서로 찾습니다.
 
@@ -106,8 +117,9 @@ CLI는 아래 환경변수로 빌드 스크립트를 실행합니다.
 IFRAME_PATH=<iframePrefix>/<project>
 ```
 
-빌드 스크립트는 다음 archive를 생성해야 합니다.
+빌드 후 다음 순서로 archive를 찾습니다. 두 파일이 모두 있으면 ZIP을 사용합니다.
 
 ```text
+iframes/<project>/<project>.zip
 iframes/<project>/<project>.tar.gz
 ```

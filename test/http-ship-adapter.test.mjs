@@ -5,6 +5,8 @@
 import assert from "node:assert/strict";
 import { BlobReader, BlobWriter, ZipReader } from "@zip.js/zip.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -84,6 +86,14 @@ test("잘못된 필수 설정은 로드 단계에서 거부한다", async () => 
         config: { ...createConfig(), fields: { stripTop: true } },
         expected: /ship 설정의 fields는 문자열 값 object여야 합니다/,
       },
+      {
+        config: { ...createConfig(), bodyType: "json" },
+        expected: /bodyType은 form-data 또는 raw여야 합니다/,
+      },
+      {
+        config: { ...createConfig(), destinationPathField: "" },
+        expected: /destinationPathField는 비어 있지 않은 문자열이어야 합니다/,
+      },
     ];
 
     for (const { config, expected } of cases) {
@@ -118,78 +128,47 @@ test("잘못된 JSON 설정은 설정 파일 경로와 함께 거부한다", asy
   }
 });
 
-test("tar.gz를 암호화 ZIP으로 포장해 설정된 multipart 요청을 보낸다", async () => {
-  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-archive-"));
-  const archivePath = path.join(
-    tempDirectory,
-    "iframe-image-editor.tar.gz",
-  );
-
-  try {
-    await writeFile(archivePath, "archive-content");
-    const adapter = createHttpShipAdapter(createConfig(), {
-      fetchImpl: async (url, options) => {
-        assert.equal(
-          url,
-          "https://private.invalid/upload",
-        );
-        assert.equal(options.method, "POST");
-        assert.equal(options.headers["x-private-auth"], "secret");
-        assert.equal(options.body.get("stripTop"), "true");
-        assert.equal(options.body.get("destinationPath"), "image-editor");
-
-        const archive = options.body.get("archive");
-        assert.equal(archive.name, "iframe-image-editor.zip");
-
-        const zipReader = new ZipReader(new BlobReader(archive));
-        try {
-          const entries = await zipReader.getEntries();
-          assert.equal(entries.length, 1);
-          assert.equal(entries[0].filename, "iframe-image-editor.tar.gz");
-
-          const extracted = await entries[0].getData(new BlobWriter(), {
-            password: "archive-password",
-          });
-          assert.equal(await extracted.text(), "archive-content");
-        } finally {
-          await zipReader.close();
-        }
-
-        return new Response(JSON.stringify({ success: true }), {
-          status: 200,
-        });
-      },
-    });
-
-    await adapter.shipIframe(archivePath);
-  } finally {
-    await rm(tempDirectory, { recursive: true, force: true });
-  }
-});
-
-for (const encryptionKey of [undefined, null, ""]) {
-  test(`encryptionKey가 ${encryptionKey === "" ? "빈 문자열" : String(encryptionKey)}이면 원본 archive를 보낸다`, async () => {
-    const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-plain-archive-"));
+for (const extension of ["zip", "tar.gz"]) {
+  test(`${extension}을 암호화 ZIP으로 포장해 설정된 multipart 요청을 보낸다`, async () => {
+    const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-archive-"));
     const archivePath = path.join(
       tempDirectory,
-      "iframe-image-editor.tar.gz",
+      `iframe-image-editor.${extension}`,
     );
-    const expectedArchiveName = path.basename(archivePath);
 
     try {
       await writeFile(archivePath, "archive-content");
-      const config = createConfig();
-      if (encryptionKey === undefined) {
-        delete config.encryptionKey;
-      } else {
-        config.encryptionKey = encryptionKey;
-      }
-
-      const adapter = createHttpShipAdapter(config, {
+      const adapter = createHttpShipAdapter(createConfig(), {
         fetchImpl: async (url, options) => {
-          assert.equal(options.body.get("archive").name, expectedArchiveName);
-          assert.equal(await options.body.get("archive").text(), "archive-content");
-          return new Response(JSON.stringify({ success: true }), { status: 200 });
+          assert.equal(
+            url,
+            "https://private.invalid/upload",
+          );
+          assert.equal(options.method, "POST");
+          assert.equal(options.headers["x-private-auth"], "secret");
+          assert.equal(options.body.get("stripTop"), "true");
+          assert.equal(options.body.get("destinationPath"), "image-editor");
+
+          const archive = options.body.get("archive");
+          assert.equal(archive.name, "iframe-image-editor.zip");
+
+          const zipReader = new ZipReader(new BlobReader(archive));
+          try {
+            const entries = await zipReader.getEntries();
+            assert.equal(entries.length, 1);
+            assert.equal(entries[0].filename, `iframe-image-editor.${extension}`);
+
+            const extracted = await entries[0].getData(new BlobWriter(), {
+              password: "archive-password",
+            });
+            assert.equal(await extracted.text(), "archive-content");
+          } finally {
+            await zipReader.close();
+          }
+
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+          });
         },
       });
 
@@ -200,9 +179,45 @@ for (const encryptionKey of [undefined, null, ""]) {
   });
 }
 
-test("tar.gz가 아닌 파일은 업로드 전에 거부한다", async () => {
+for (const [extension, mime] of [["zip", "application/zip"], ["tar.gz", "application/gzip"]]) {
+  for (const encryptionKey of [undefined, null, ""]) {
+    test(`${extension}에서 encryptionKey가 ${encryptionKey === "" ? "빈 문자열" : String(encryptionKey)}이면 원본 archive를 보낸다`, async () => {
+      const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-plain-archive-"));
+      const archivePath = path.join(
+        tempDirectory,
+        `iframe-image-editor.${extension}`,
+      );
+      const expectedArchiveName = path.basename(archivePath);
+
+      try {
+        await writeFile(archivePath, "archive-content");
+        const config = createConfig();
+        if (encryptionKey === undefined) {
+          delete config.encryptionKey;
+        } else {
+          config.encryptionKey = encryptionKey;
+        }
+
+        const adapter = createHttpShipAdapter(config, {
+          fetchImpl: async (url, options) => {
+            assert.equal(options.body.get("archive").name, expectedArchiveName);
+            assert.equal(options.body.get("archive").type, mime);
+            assert.equal(await options.body.get("archive").text(), "archive-content");
+            return new Response(JSON.stringify({ success: true }), { status: 200 });
+          },
+        });
+
+        await adapter.shipIframe(archivePath);
+      } finally {
+        await rm(tempDirectory, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test("ZIP과 tar.gz가 아닌 파일은 업로드 전에 거부한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-extension-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
+  const archivePath = path.join(tempDirectory, "iframe-editor.tar.bz2");
 
   try {
     await writeFile(archivePath, "archive");
@@ -213,7 +228,7 @@ test("tar.gz가 아닌 파일은 업로드 전에 거부한다", async () => {
 
     await assert.rejects(
       adapter.shipIframe(archivePath),
-      /tar\.gz archive가 아닙니다: iframe-editor\.zip/,
+      /zip 또는 tar\.gz archive가 아닙니다: iframe-editor\.tar\.bz2/,
     );
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
@@ -222,7 +237,7 @@ test("tar.gz가 아닌 파일은 업로드 전에 거부한다", async () => {
 
 test("HTTP 오류 응답은 ship 실패로 처리한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-http-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
 
   try {
     await writeFile(archivePath, "archive");
@@ -241,7 +256,7 @@ test("HTTP 오류 응답은 ship 실패로 처리한다", async () => {
 
 test("HTTP 200의 application 오류도 ship 실패로 처리한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-response-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
 
   try {
     await writeFile(archivePath, "archive");
@@ -264,7 +279,7 @@ test("HTTP 200의 application 오류도 ship 실패로 처리한다", async () =
 
 test("JSON이 아닌 서버 응답은 명시적인 오류로 처리한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-json-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
 
   try {
     await writeFile(archivePath, "archive");
@@ -283,7 +298,7 @@ test("JSON이 아닌 서버 응답은 명시적인 오류로 처리한다", asyn
 
 test("네트워크 오류의 내부 정보는 노출하지 않는다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-network-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
 
   try {
     await writeFile(archivePath, "archive");
@@ -307,7 +322,7 @@ test("네트워크 오류의 내부 정보는 노출하지 않는다", async () 
 
 test("인증서 검증 오류의 원인을 표시한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-cert-error-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
 
   try {
     await writeFile(archivePath, "archive");
@@ -330,7 +345,7 @@ test("인증서 검증 오류의 원인을 표시한다", async () => {
 
 test("연결 초기화 오류의 원인을 표시한다", async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-reset-error-"));
-  const archivePath = path.join(tempDirectory, "iframe-editor.tar.gz");
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
 
   try {
     await writeFile(archivePath, "archive");
@@ -346,6 +361,94 @@ test("연결 초기화 오류의 원인을 표시한다", async () => {
       adapter.shipIframe(archivePath),
       /배포 서버에 연결할 수 없습니다: \[ECONNRESET\] socket hang up/,
     );
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+for (const [extension, mime] of [["zip", "application/zip"], ["tar.gz", "application/gzip"]]) {
+  test(`raw 모드는 ${extension} 원본과 길이를 보내고 대상 경로와 fields를 쿼리로 전달한다`, async () => {
+    const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-raw-"));
+    const archivePath = path.join(tempDirectory, `iframe-image-editor.${extension}`);
+    const content = Buffer.from([0, 1, 255, 13, 10, 42]);
+    let received;
+    const server = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      received = { url: request.url, headers: request.headers, body: Buffer.concat(chunks) };
+      response.writeHead(201, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ name: "image-editor", type: "DRCTRY", etag: "example" }));
+    });
+    try {
+      await writeFile(archivePath, content);
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const config = {
+        ...createConfig(),
+        bodyType: "raw",
+        destinationPathField: "path",
+        encryptionKey: null,
+        endpoint: `http://127.0.0.1:${server.address().port}/upload?domain=iframe&path=old`,
+        fields: { mode: "overwrite", path: "ignored" },
+      };
+      delete config.fileField;
+      const adapter = createHttpShipAdapter(config);
+
+      await adapter.shipIframe(archivePath);
+
+      assert.equal(received.url, "/upload?domain=iframe&path=image-editor&mode=overwrite");
+      assert.equal(received.headers["content-type"], mime);
+      assert.equal(received.headers["content-length"], "6");
+      assert.equal(received.headers["x-private-auth"], "secret");
+      assert.deepEqual(received.body, content);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      await rm(tempDirectory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("raw 모드 설정은 multipart 전용 fileField 없이 로드한다", async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-raw-config-"));
+  const configPath = path.join(tempDirectory, "ship.json");
+  try {
+    const config = { ...createConfig(), bodyType: "raw", destinationPathField: "path" };
+    delete config.fileField;
+    await writeFile(configPath, JSON.stringify(config));
+
+    assert.equal((await loadShipConfig(configPath)).bodyType, "raw");
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("명시한 form-data 모드는 기존 폼 본문과 success 판정을 유지한다", async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-form-config-"));
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
+  try {
+    await writeFile(archivePath, "archive");
+    const adapter = createHttpShipAdapter({ ...createConfig(), bodyType: "form-data", encryptionKey: null }, {
+      fetchImpl: async (_url, options) => {
+        assert.ok(options.body instanceof FormData);
+        assert.equal(options.body.get("destinationPath"), "editor");
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      },
+    });
+    await adapter.shipIframe(archivePath);
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test("raw 모드의 HTTP 오류도 실패로 처리한다", async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "ship-raw-error-"));
+  const archivePath = path.join(tempDirectory, "iframe-editor.zip");
+  try {
+    await writeFile(archivePath, "archive");
+    const adapter = createHttpShipAdapter({ ...createConfig(), bodyType: "raw", encryptionKey: null }, {
+      fetchImpl: async () => new Response("unavailable", { status: 503 }),
+    });
+    await assert.rejects(adapter.shipIframe(archivePath), /배포 요청이 실패했습니다: HTTP 503/);
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
   }

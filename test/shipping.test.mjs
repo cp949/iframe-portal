@@ -218,53 +218,61 @@ test(
   },
 );
 
-test("프로젝트별 IFRAME_PATH로 빌드한 archive를 adapter에 전달한다", async () => {
-  const fixture = await createFixture();
-  const projectName = "iframe-alpha";
-  const projectDirectory = path.join(fixture.iframesDirectory, projectName);
-  const buildScript = path.join(projectDirectory, "iframe-build-html.sh");
-  const receivedPathFile = path.join(projectDirectory, "received-path.txt");
-  const shippedArchiveFile = path.join(projectDirectory, "shipped-archive.txt");
+for (const { extensions, expectedExtension, label } of [
+  { extensions: ["zip"], expectedExtension: "zip", label: "ZIP만 있으면" },
+  { extensions: ["tar.gz"], expectedExtension: "tar.gz", label: "ZIP 없이 tar.gz만 있으면" },
+  { extensions: ["zip", "tar.gz"], expectedExtension: "zip", label: "두 형식이 모두 있으면 ZIP을 선택하고" },
+]) {
+  test(`${label} 프로젝트별 IFRAME_PATH로 빌드한 archive를 adapter에 전달한다`, async () => {
+    const fixture = await createFixture();
+    const projectName = "iframe-alpha";
+    const projectDirectory = path.join(fixture.iframesDirectory, projectName);
+    const buildScript = path.join(projectDirectory, "iframe-build-html.sh");
+    const receivedPathFile = path.join(projectDirectory, "received-path.txt");
+    const shippedArchiveFile = path.join(projectDirectory, "shipped-archive.txt");
 
-  try {
-    await mkdir(projectDirectory);
-    await writeFile(
-      buildScript,
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        // Windows에서 MSYS 경로 변환이 일어나는 지점은 native 프로그램 실행이므로 node로 기록한다.
-        `node -e "require('node:fs').writeFileSync(process.argv[1], process.env.IFRAME_PATH + '|' + process.argv[2])" ${JSON.stringify(toShellPath(receivedPathFile))} \"$IFRAME_PATH\"`,
-        `printf 'archive' > ${JSON.stringify(toShellPath(path.join(projectDirectory, `${projectName}.tar.gz`)))}`,
-      ].join("\n"),
-    );
-    await chmod(buildScript, 0o755);
+    try {
+      await mkdir(projectDirectory);
+      await writeFile(
+        buildScript,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          // Windows에서 MSYS 경로 변환이 일어나는 지점은 native 프로그램 실행이므로 node로 기록한다.
+          `node -e "require('node:fs').writeFileSync(process.argv[1], process.env.IFRAME_PATH + '|' + process.argv[2])" ${JSON.stringify(toShellPath(receivedPathFile))} \"$IFRAME_PATH\"`,
+          ...extensions.map((extension) =>
+            `printf 'archive' > ${JSON.stringify(toShellPath(path.join(projectDirectory, `${projectName}.${extension}`)))}`,
+          ),
+        ].join("\n"),
+      );
+      await chmod(buildScript, 0o755);
 
-    await shipProjects({
-      iframesDirectory: fixture.iframesDirectory,
-      projectNames: [projectName],
-      adapter: {
-        getIframePath(name) {
-          return `/private/iframe/${name}`;
+      await shipProjects({
+        iframesDirectory: fixture.iframesDirectory,
+        projectNames: [projectName],
+        adapter: {
+          getIframePath(name) {
+            return `/private/iframe/${name}`;
+          },
+          async shipIframe(archivePath) {
+            await writeFile(shippedArchiveFile, archivePath);
+          },
         },
-        async shipIframe(archivePath) {
-          await writeFile(shippedArchiveFile, archivePath);
-        },
-      },
-    });
+      });
 
-    assert.equal(
-      await readFile(receivedPathFile, "utf8"),
-      "/private/iframe/iframe-alpha|/private/iframe/iframe-alpha",
-    );
-    assert.equal(
-      await readFile(shippedArchiveFile, "utf8"),
-      path.join(projectDirectory, "iframe-alpha.tar.gz"),
-    );
-  } finally {
-    await fixture.dispose();
-  }
-});
+      assert.equal(
+        await readFile(receivedPathFile, "utf8"),
+        "/private/iframe/iframe-alpha|/private/iframe/iframe-alpha",
+      );
+      assert.equal(
+        await readFile(shippedArchiveFile, "utf8"),
+        path.join(projectDirectory, `iframe-alpha.${expectedExtension}`),
+      );
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
 
 test("빌드 결과 archive가 없으면 adapter를 호출하지 않는다", async () => {
   const fixture = await createFixture();

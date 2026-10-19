@@ -154,9 +154,8 @@ export async function shipProjects({
   for (const projectName of projectNames) {
     const projectDirectory = path.join(iframesDirectory, projectName);
     const buildScript = path.join(projectDirectory, "iframe-build-html.sh");
-    const archivePath = path.join(
-      projectDirectory,
-      `${projectName}.tar.gz`,
+    const archivePaths = ["zip", "tar.gz"].map((extension) =>
+      path.join(projectDirectory, `${projectName}.${extension}`),
     );
     const iframePath = adapter.getIframePath(projectName);
 
@@ -168,10 +167,19 @@ export async function shipProjects({
 
     await runBuild(buildScript, projectDirectory, iframePath);
 
-    try {
-      if (!(await stat(archivePath)).isFile()) throw new Error();
-    } catch {
-      throw new Error(`빌드 archive를 찾을 수 없습니다: ${archivePath}`);
+    let archivePath;
+    for (const candidate of archivePaths) {
+      try {
+        if ((await stat(candidate)).isFile()) {
+          archivePath = candidate;
+          break;
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+      }
+    }
+    if (!archivePath) {
+      throw new Error(`빌드 archive를 찾을 수 없습니다: ${archivePaths.join(", ")}`);
     }
 
     await adapter.shipIframe(archivePath);

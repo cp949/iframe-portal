@@ -84,7 +84,13 @@ export async function loadShipConfig(configPath) {
   assertNonEmptyString(config, "iframePrefix");
   assertNonEmptyString(config, "endpoint");
   assertStringRecord(config, "headers");
-  assertNonEmptyString(config, "fileField");
+  if (config.bodyType !== undefined && !["form-data", "raw"].includes(config.bodyType)) {
+    throw new Error("ship 설정의 bodyType은 form-data 또는 raw여야 합니다.");
+  }
+  if (config.destinationPathField !== undefined) {
+    assertNonEmptyString(config, "destinationPathField");
+  }
+  if (config.bodyType !== "raw") assertNonEmptyString(config, "fileField");
   assertStringRecord(config, "fields");
 
   return config;
@@ -115,41 +121,51 @@ export function createHttpShipAdapter(
     async shipIframe(archivePath) {
       const archiveName = path.basename(archivePath);
 
-      if (!archiveName.endsWith(".tar.gz")) {
-        throw new Error(`tar.gz archive가 아닙니다: ${archiveName}`);
+      const extension = [".zip", ".tar.gz"].find((suffix) => archiveName.endsWith(suffix));
+      if (!extension) {
+        throw new Error(`zip 또는 tar.gz archive가 아닙니다: ${archiveName}`);
       }
 
-      const projectName = archiveName.slice(0, -".tar.gz".length);
+      const projectName = archiveName.slice(0, -extension.length);
       const destinationPath = getDestinationPath(projectName);
 
-      const formData = new FormData();
       const archive = config.encryptionKey
         ? await createEncryptedArchive(archivePath, config.encryptionKey)
         : new Blob([await readFile(archivePath)], {
-            type: "application/gzip",
+            type: extension === ".zip" ? "application/zip" : "application/gzip",
           });
-      const uploadArchiveName = config.encryptionKey
-        ? `${projectName}.zip`
-        : archiveName;
-      formData.append(
-        config.fileField,
-        archive,
-        uploadArchiveName,
-      );
-
-      for (const [fieldName, fieldValue] of Object.entries(config.fields)) {
-        formData.append(fieldName, fieldValue);
+      const destinationPathField = config.destinationPathField ?? "destinationPath";
+      let endpoint = config.endpoint.replace(/\/+$/, "");
+      let body = archive;
+      let headers = config.headers;
+      if (config.bodyType === "raw") {
+        const url = new URL(endpoint);
+        for (const [fieldName, fieldValue] of Object.entries(config.fields)) {
+          url.searchParams.set(fieldName, fieldValue);
+        }
+        url.searchParams.set(destinationPathField, destinationPath);
+        endpoint = url.toString();
+        headers = new Headers(config.headers);
+        if (!headers.has("Content-Type")) headers.set("Content-Type", archive.type);
+      } else {
+        const formData = new FormData();
+        const uploadArchiveName = config.encryptionKey ? `${projectName}.zip` : archiveName;
+        formData.append(config.fileField, archive, uploadArchiveName);
+        for (const [fieldName, fieldValue] of Object.entries(config.fields)) {
+          formData.append(fieldName, fieldValue);
+        }
+        formData.append(destinationPathField, destinationPath);
+        body = formData;
       }
-      formData.append("destinationPath", destinationPath);
 
       let response;
       try {
         response = await fetchImpl(
-          config.endpoint.replace(/\/+$/, ""),
+          endpoint,
           {
             method: "POST",
-            headers: config.headers,
-            body: formData,
+            headers,
+            body,
           },
         );
       } catch (error) {
@@ -165,6 +181,7 @@ export function createHttpShipAdapter(
       if (!response.ok) {
         throw new Error(`배포 요청이 실패했습니다: HTTP ${response.status}`);
       }
+      if (config.bodyType === "raw") return;
 
       let result;
       try {

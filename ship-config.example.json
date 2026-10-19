@@ -1,6 +1,8 @@
 {
   "iframePrefix": "/abc-server/iframe",
   "endpoint": "https://abc.com/abc-server/upload",
+  "bodyType": "form-data",
+  "destinationPathField": "destinationPath",
   "headers": {
     "x-custom-header": "sample"
   },
