@@ -44,7 +44,14 @@ chmod 600 ~/.config/iframe-portal/ship.json
 - `fileField`: multipart archive 필드명
 - `fields`: multipart에 추가할 문자열 필드
 
-다른 위치를 사용하려면 `IFRAME_PORTAL_SHIP_CONFIG_PATH`에 설정 파일 경로를 지정합니다. `XDG_CONFIG_HOME`이 설정되어 있으면 기본 경로도 이를 따릅니다.
+설정 파일은 아래 순서로 찾습니다.
+
+1. `IFRAME_PORTAL_SHIP_CONFIG_PATH` 환경변수에 지정한 경로
+2. 저장소 루트의 `.secrets/ship.json` (`.gitignore`에 포함)
+3. `$XDG_CONFIG_HOME/iframe-portal/ship.json`
+4. `~/.config/iframe-portal/ship.json`
+
+환경변수를 지정하면 파일이 없어도 다른 경로로 넘어가지 않고 실패합니다.
 
 ## 실행
 

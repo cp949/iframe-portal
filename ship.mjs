@@ -20,9 +20,21 @@ import {
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const configHome =
   process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config");
-const configPath =
-  process.env.IFRAME_PORTAL_SHIP_CONFIG_PATH ??
-  path.join(configHome, "iframe-portal", "ship.json");
+const secretsConfigPath = path.join(scriptDirectory, ".secrets", "ship.json");
+const defaultConfigPath = path.join(configHome, "iframe-portal", "ship.json");
+
+/** 환경변수 > 저장소 .secrets/ship.json > 사용자 설정 디렉터리 순으로 고른다. */
+async function resolveConfigPath() {
+  if (process.env.IFRAME_PORTAL_SHIP_CONFIG_PATH !== undefined) {
+    return process.env.IFRAME_PORTAL_SHIP_CONFIG_PATH;
+  }
+  try {
+    await access(secretsConfigPath);
+    return secretsConfigPath;
+  } catch {
+    return defaultConfigPath;
+  }
+}
 
 const program = new Command()
   .name("ship")
@@ -34,6 +46,7 @@ const program = new Command()
 program.parse();
 
 async function main() {
+  const configPath = await resolveConfigPath();
   try {
     await access(configPath);
   } catch {

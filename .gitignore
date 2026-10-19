@@ -1,5 +1,6 @@
 iframes/*
 !iframes/.gitkeep
 node_modules/
+.secrets/
 .env
 .env.*
